@@ -1,99 +1,127 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
-import pandas as pd
+import os
+import mysql.connector
 import pickle
-from xgboost import XGBRegressor
-from sklearn.preprocessing import MinMaxScaler
-import logging
+import pandas as pd
 
-# Inisialisasi FastAPI
-app = FastAPI(title="Tanaman Padi Prediction API (XGBoost)")
+main = FastAPI(title="Product Category Prediction API (From MySQL)")
 
-# Konfigurasi logging
-logging.basicConfig(level=logging.INFO)
+# Load model dan scaler
+current_dir = os.path.dirname(__file__)
+model_path = os.path.join(current_dir, "WebMinnersbaru.pkl")
 
-# Load model XGBoost dari file pickle
-try:
-    with open("XGBoost_Regressor_model.pkl", "rb") as f:
-        xgb = pickle.load(f)
-    logging.info("✅ Model XGBoost berhasil dimuat.")
-except Exception as e:
-    logging.error(f"❌ Gagal memuat model: {e}")
-    xgb = None
+with open(model_path, "rb") as f:
+    saved_objects = pickle.load(f)
+    model = saved_objects['model']
+    scaler = saved_objects['scaler']
 
-# Load MinMaxScaler model dari pickle
-try:
-    with open("minmax_scaler.pkl", "rb") as f:
-        scaler = pickle.load(f)
-    logging.info("✅ Model MinMaxScaler berhasil dimuat.")
-except Exception as e:
-    logging.error(f"❌ Gagal memuat model MinMaxScaler: {e}")
-    scaler = None
+# Mapping angka ke nama produk
+product_mapping = {
+    0: 'Air Biasa',
+    1: 'Air Mineral (Besar)',
+    2: 'Air Mineral (Kecil)',
+    3: 'Alvredo Pasta',
+    4: 'Americano',
+    5: 'Apple Fiz',
+    6: 'Apple Tea',
+    7: 'Bananas Coffee',
+    8: 'Berry Tea',
+    9: 'Biscoff Butter',
+    10: 'Blackforest',
+    11: 'Blue Paradise',
+    12: 'Butterscoth Latte',
+    13: 'Cake Velvet',
+    14: 'Cappucino',
+    15: 'Caramel Macchiato',
+    16: 'Cheesecake',
+    17: 'Cheseecake Latte',
+    18: 'Chicken Katsu',
+    19: 'Churros',
+    20: 'Cireng',
+    21: 'Coffee Latte',
+    22: 'Cookies N Cream',
+    23: 'Croffle Ice Cream',
+    24: 'Dark Chocolate',
+    25: 'Espresso',
+    26: 'French Fries',
+    27: 'Fried Rice Erthree',
+    28: 'Hazelnut Latte',
+    29: 'Japanese Chicken Curry',
+    30: 'Javanese',
+    31: 'Kebab',
+    32: 'Kopi Cream',
+    33: 'Lovely',
+    34: 'Lumpia',
+    35: 'Lychee Tea',
+    36: 'Mango Tea',
+    37: 'Matcha Cloud',
+    38: 'Milo Cream',
+    39: 'Mix Platter',
+    40: 'Naktamala',
+    41: 'Pandan Latte',
+    42: 'Peach Tea',
+    43: 'Pempek',
+    44: 'Piccolo',
+    45: 'Pisang Keju',
+    46: 'Rice Beef Blackpaper',
+    47: 'Rice Beef Bulgogi',
+    48: 'Risol Mayo',
+    49: 'Roti Bakar',
+    50: 'Sea Salted Caramel Latte',
+    51: 'Signature Erthree Coffee',
+    52: 'Singkong',
+    53: 'Spaghetti Bolognese',
+    54: 'Spaghetti Brulle',
+    55: 'Sweet Honey Karage',
+    56: 'Taro',
+    57: 'Tiramissyou Latte',
+    58: 'Tropical Mango',
+    59: 'V60',
+    60: 'Vanila Regal',
+    61: 'Vietnam Drip',
+    62: 'Cheesey Fries Beef',
+    63: 'Erthree Toast',
+    64: 'Berry Punch',
+    65: 'Bundle Package',
+    66: 'Butter Sea Salt Latte',
+    67: 'Cheessy Fries Beef',
+    68: 'Pistachio Latte',
+    69: 'Spanish',
+    70: 'Big Platter'
+}
 
-# Input schema sesuai nama kolom saat training
-class CropData(BaseModel):
-    Provinsi: int
-    Tahun: int
-    Produksi: float
-    Luas_Panen: float
-    Curah_hujan: float
-    Kelembapan: float
-    Suhu_rata_rata: float
+# Koneksi ke database MySQL
+def get_mysql_connection():
+    return mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="",  # sesuaikan kalau kamu pakai password
+        database="data_erthree"  # ganti dengan nama database kamu
+    )
 
-# Output schema untuk hasil prediksi
-class PredictionResponse(BaseModel):
-    prediction: float
+@main.get("/predict-from-db/{product_id}")
+def predict_from_database(product_id: int):
+    conn = get_mysql_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    # Ambil data dari MySQL berdasarkan ID
+    cursor.execute("SELECT Product_Name, Product_Price, Quantity, Total, Month, Quantity_Monthly, Day, Year FROM product WHERE id = %s", (product_id,))
+    row = cursor.fetchone()
 
-# Root endpoint
-@app.get("/")
-def read_root():
-    return {"message": "✅ XGBoost API for Tanaman Padi Prediction is running"}
+    if not row:
+        return {"error": "Produk tidak ditemukan di database"}
 
-# Preprocessing input
-def preprocess_input(data: CropData):
-    # Convert input ke DataFrame
-    df = pd.DataFrame([data.dict()])
-    logging.info(f"Input data: {df}")
+    # Ubah ke DataFrame & scaling
+    df = pd.DataFrame([row])
+    df_scaled = scaler.transform(df)
+    df_scaled = pd.DataFrame(df_scaled, columns=df.columns)
 
-    # Pemetaan nama kolom agar sesuai dengan nama kolom saat model dilatih
-    column_mapping = {
-        "Luas_Panen": "Luas Panen",
-        "Curah_hujan": "Curah hujan",
-        "Suhu_rata_rata": "Suhu rata-rata"
+    # Prediksi
+    prediction = model.predict(df_scaled)[0]
+    label_map = {0: "Sedikit", 1: "Sedang", 2: "Banyak"}
+    product_name_real = product_mapping.get(row['Product_Name'], "Unknown Product")
+
+    return {
+        "product": product_name_real,
+        "predicted_category": label_map.get(prediction, "Unknown")
     }
-    df.rename(columns=column_mapping, inplace=True)
-
-    # Periksa apakah ada kolom yang hilang atau tidak sesuai dengan model
-    expected_columns = ['Provinsi', 'Tahun', 'Produksi', 'Luas Panen', 'Curah hujan', 'Kelembapan', 'Suhu rata-rata']
-    missing_cols = [col for col in expected_columns if col not in df.columns]
-    
-    if missing_cols:
-        raise ValueError(f"Missing columns in input data: {', '.join(missing_cols)}")
-
-    if scaler is None:
-        raise ValueError("Scaler belum dimuat. Pastikan file 'minmax_scaler.pkl' tersedia.")
-    
-    # Apply MinMax normalization (using pre-loaded scaler)
-    df_scaled = pd.DataFrame(scaler.transform(df), columns=df.columns)
-
-    logging.info(f"Normalized input data: {df_scaled}")
-    
-    return df_scaled
-
-# Prediction endpoint
-@app.post("/predict", response_model=PredictionResponse)
-def predict_crop_yield(data: CropData):
-    try:
-        if xgb is None:
-            raise ValueError("Model belum dimuat. Pastikan file 'xgboost_model.pkl' tersedia.")
-        
-        # Preprocess and normalize input data
-        processed = preprocess_input(data)
-        
-        # Predict using the XGBoost model
-        prediction = xgb.predict(processed)[0]
-        
-        return {"prediction": round(float(prediction), 2)}
-    except Exception as e:
-        logging.error(f"Prediction error: {e}")
-        return {"error": str(e)}
